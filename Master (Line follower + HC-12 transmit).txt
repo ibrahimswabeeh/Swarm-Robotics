@@ -1,0 +1,113 @@
+/*
+ Master - Line follower + HC-12 transmitter
+ MCU: PIC16F877A / XC8
+ Fosc = 20MHz
+ HC-12 TX -> RC7 (PIC RX)
+ HC-12 RX -> RC6 (PIC TX)
+ Motors on RB0..RB3, IR sensors on RD2,RD3
+*/
+
+#include <xc.h>
+#define _XTAL_FREQ 20000000UL
+
+// CONFIG
+#pragma config FOSC = HS
+#pragma config WDTE = OFF
+#pragma config PWRTE = ON
+#pragma config BOREN = ON
+#pragma config LVP = OFF
+#pragma config CPD = OFF
+#pragma config WRT = OFF
+#pragma config CP = OFF
+
+// Motor macros
+#define M1_IN1 LATBbits.LATB0
+#define M1_IN2 LATBbits.LATB1
+#define M2_IN1 LATBbits.LATB2
+#define M2_IN2 LATBbits.LATB3
+
+// Sensor pins (RD2, RD3)
+#define S_LEFT  PORTDbits.RD2
+#define S_RIGHT PORTDbits.RD3
+
+char last_cmd = 0;
+
+void uart_init(void) {
+    // Asynchronous, 8-bit, BRGH = 1, SPBRG = 31 for ~9600 @20MHz
+    TXSTAbits.SYNC = 0; // async
+    TXSTAbits.BRGH = 1; // high speed
+    BAUDCTLbits.BRG16 = 0; // 8-bit SPBRG
+    SPBRG = 31; // value calculated for 20MHz, 9600
+    RCSTAbits.SPEN = 1; // enable serial port (config RX/DT and TX/CK pins)
+    TXSTAbits.TXEN = 1; // enable transmitter
+    RCSTAbits.CREN = 1; // enable receiver
+}
+
+void uart_send_char(char c) {
+    while(!PIR1bits.TXIF); // wait for buffer empty
+    TXREG = c;
+    // optionally wait for transmit to complete: while(!TXSTAbits.TRMT);
+}
+
+void set_motors_forward(void) {
+    M1_IN1 = 1; M1_IN2 = 0;
+    M2_IN1 = 1; M2_IN2 = 0;
+}
+void set_motors_left(void) {
+    // stop/slow left wheel, right forward -> pivot left
+    M1_IN1 = 0; M1_IN2 = 0;
+    M2_IN1 = 1; M2_IN2 = 0;
+}
+void set_motors_right(void) {
+    M1_IN1 = 1; M1_IN2 = 0;
+    M2_IN1 = 0; M2_IN2 = 0;
+}
+void set_motors_stop(void) {
+    M1_IN1 = 0; M1_IN2 = 0;
+    M2_IN1 = 0; M2_IN2 = 0;
+}
+
+void main(void) {
+    // TRIS setup
+    TRISDbits.TRISD2 = 1; // left sensor input
+    TRISDbits.TRISD3 = 1; // right sensor input
+
+    TRISBbits.TRISB0 = 0; // motor outputs
+    TRISBbits.TRISB1 = 0;
+    TRISBbits.TRISB2 = 0;
+    TRISBbits.TRISB3 = 0;
+
+    // UART pins are RC6 (TX) RC7 (RX) handled by SPEN; ensure PORTC pins digital
+    TRISCbits.TRISC6 = 1; // TX pin controlled by UART; set input to disable output driver as recommended
+    TRISCbits.TRISC7 = 1; // RX pin input
+
+    LATB = 0; // motors off
+
+    uart_init();
+    __delay_ms(100);
+
+    while(1) {
+        // read sensors (active low for black line in your sketch originally; adjust as needed)
+        if (S_LEFT == 1 && S_RIGHT == 1) {
+            // both sensors not on black -> forward
+            set_motors_forward();
+            if (last_cmd != 'F') { uart_send_char('F'); last_cmd = 'F'; }
+        }
+        else if (S_LEFT == 0 && S_RIGHT == 1) {
+            // left on black -> turn left
+            set_motors_left();
+            if (last_cmd != 'L') { uart_send_char('L'); last_cmd = 'L'; }
+        }
+        else if (S_LEFT == 1 && S_RIGHT == 0) {
+            // right on black -> turn right
+            set_motors_right();
+            if (last_cmd != 'R') { uart_send_char('R'); last_cmd = 'R'; }
+        }
+        else {
+            // both over black -> stop
+            set_motors_stop();
+            if (last_cmd != 'S') { uart_send_char('S'); last_cmd = 'S'; }
+        }
+        __delay_ms(60); // small loop delay to reduce traffic and bouncing effect
+    }
+}

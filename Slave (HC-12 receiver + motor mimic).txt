@@ -1,0 +1,81 @@
+/*
+ Slave - receives char via HC-12 and mimics master's motor commands
+ MCU: PIC16F877A / XC8
+ Motors on RB0..RB3
+ HC-12 TX -> RC7 (PIC RX)
+ HC-12 RX -> RC6 (PIC TX) - TX not used on slave but left initialized
+*/
+
+#include <xc.h>
+#define _XTAL_FREQ 20000000UL
+
+#pragma config FOSC = HS
+#pragma config WDTE = OFF
+#pragma config PWRTE = ON
+#pragma config BOREN = ON
+#pragma config LVP = OFF
+#pragma config CPD = OFF
+#pragma config WRT = OFF
+#pragma config CP = OFF
+
+#define M1_IN1 LATBbits.LATB0
+#define M1_IN2 LATBbits.LATB1
+#define M2_IN1 LATBbits.LATB2
+#define M2_IN2 LATBbits.LATB3
+
+void uart_init(void) {
+    TXSTAbits.SYNC = 0;
+    TXSTAbits.BRGH = 1;
+    BAUDCTLbits.BRG16 = 0;
+    SPBRG = 31; // 9600 @ 20MHz
+    RCSTAbits.SPEN = 1;
+    TXSTAbits.TXEN = 1;
+    RCSTAbits.CREN = 1;
+}
+
+void set_motors_forward(void) {
+    M1_IN1 = 1; M1_IN2 = 0;
+    M2_IN1 = 1; M2_IN2 = 0;
+}
+void set_motors_left(void) {
+    M1_IN1 = 0; M1_IN2 = 0;
+    M2_IN1 = 1; M2_IN2 = 0;
+}
+void set_motors_right(void) {
+    M1_IN1 = 1; M1_IN2 = 0;
+    M2_IN1 = 0; M2_IN2 = 0;
+}
+void set_motors_stop(void) {
+    M1_IN1 = 0; M1_IN2 = 0;
+    M2_IN1 = 0; M2_IN2 = 0;
+}
+
+void main(void) {
+    TRISBbits.TRISB0 = 0; TRISBbits.TRISB1 = 0;
+    TRISBbits.TRISB2 = 0; TRISBbits.TRISB3 = 0;
+    LATB = 0;
+
+    // set RX/TX pins tri-stated for UART
+    TRISCbits.TRISC6 = 1;
+    TRISCbits.TRISC7 = 1;
+
+    uart_init();
+    __delay_ms(100);
+
+    while(1) {
+        if (PIR1bits.RCIF) {
+            if (RCSTAbits.OERR) { // clear overrun
+                RCSTAbits.CREN = 0;
+                RCSTAbits.CREN = 1;
+            }
+            char cmd = RCREG;
+            switch(cmd) {
+                case 'F': set_motors_forward(); break;
+                case 'L': set_motors_left(); break;
+                case 'R': set_motors_right(); break;
+                case 'S': default: set_motors_stop(); break;
+            }
+        }
+        // optional: watchdog for timeout to stop if no packet received for long time
+    }
+}
